@@ -1,0 +1,77 @@
+name: ci
+
+# Default to 'contents: read', which grants actions to read commits.
+#
+# If any permission is set, any permission not included in the list is
+# implicitly set to "none".
+#
+# see https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#permissions
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'master'
+  pull_request:
+
+env:
+  DESTDIR: ./build
+  GO_VERSION: "1.22.8"
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    strategy:
+      matrix:
+        go: ["1.22.8", "1.23.2"]
+
+    steps:
+      - uses: actions/checkout@v4 
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+      - name: Create go.mod
+        run: |
+          ln -s vendor.mod go.mod
+          ln -s vendor.sum go.sum
+      - name: Run tests
+        run: go test -race
+  
+  govulncheck:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    permissions:
+      # required to write sarif report
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create go.mod
+        run: |
+          ln -s vendor.mod go.mod
+          ln -s vendor.sum go.sum
+      - name: Create artifact directory
+        run: mkdir -p ${{ env.DESTDIR }}
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: ${{ env.GO_VERSION }}
+          go-package: ./...
+          repo-checkout: false
+          output-format: 'sarif'
+          output-file: ${{ env.DESTDIR }}/govulncheck.out
+      - name: Upload SARIF report
+        if: ${{ github.event_name != 'pull_request' && github.repository == 'docker/go-events' }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ env.DESTDIR }}/govulncheck.out 
